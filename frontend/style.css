@@ -1,0 +1,194 @@
+:root {
+  color: #25212c;
+  background: #fff8f7;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+header,
+nav,
+main,
+footer {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+header {
+  padding-top: 2.5rem;
+}
+
+h1 {
+  margin: 0;
+  color: #e82761;
+}
+
+nav {
+  display: flex;
+  gap: 1rem;
+}
+
+nav a {
+  color: #8d1744;
+}
+
+.section-label {
+  font-weight: 700;
+  margin: 0 0 0.75rem;
+}
+
+#roster-panel,
+#add-student,
+#ai-helper {
+  margin: 1rem 0;
+}
+
+#roster-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  padding: 1rem;
+  margin: 0;
+  border: 2px solid #e82761;
+  background: #ffffff;
+}
+
+.student-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.65rem;
+  padding: 1rem;
+  margin: 0;
+  border: 1px solid #9a8590;
+  border-radius: 0.5rem;
+  background: #fff4f7;
+}
+
+.student-card p {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.student-name {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.age-control {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+button {
+  cursor: pointer;
+  border: 0;
+  border-radius: 0.3rem;
+  padding: 0.55rem 0.8rem;
+  color: #ffffff;
+  background: #e82761;
+}
+
+.delete-button {
+  background: #5d243b;
+}
+
+#student-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  align-items: end;
+  padding: 1rem;
+  border: 1px solid #9a8590;
+}
+
+label,
+input {
+  display: block;
+}
+
+textarea {
+  width: 100%;
+  margin-top: 0.3rem;
+  padding: 0.55rem;
+  resize: vertical;
+  font: inherit;
+}
+
+.ai-helper-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.ai-form,
+.assistant-result {
+  padding: 1rem;
+  border: 1px solid #9a8590;
+  background: #ffffff;
+}
+
+.ai-form {
+  display: grid;
+  gap: 0.7rem;
+  align-content: start;
+}
+
+.assistant-result:empty::before {
+  content: "Results will appear here.";
+  color: #6f5963;
+}
+
+.assistant-result p {
+  margin: 0.25rem 0;
+}
+
+.assistant-result ul {
+  margin: 0.5rem 0;
+  padding-left: 1.25rem;
+}
+
+.note-result {
+  padding: 0.6rem 0;
+  border-bottom: 1px solid #e7d9de;
+}
+
+.note-result:last-child {
+  border-bottom: 0;
+}
+
+input {
+  width: 100%;
+  margin-top: 0.3rem;
+  padding: 0.45rem;
+}
+
+#error-banner {
+  margin: 1rem 0;
+  padding: 0.8rem;
+  border: 1px solid #a9002d;
+  color: #7f001f;
+  background: #ffe5eb;
+}
+
+footer {
+  color: #6f5963;
+}
+
+@media (max-width: 600px) {
+  #roster-list {
+    grid-template-columns: 1fr;
+  }
+
+  #student-form,
+  .ai-helper-grid {
+    grid-template-columns: 1fr;
+  }
+}

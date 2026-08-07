@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StudyTrack Trainee Roster</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>StudyTrack Trainee Roster</h1>
+      <p>Manage trainee records directly from the Myntra Enablement roster.</p>
+    </header>
+
+    <nav aria-label="Page navigation">
+      <a href="#roster-list">Roster</a>
+      <a href="#add-student">Add trainee</a>
+      <a href="#ai-helper">AI Helper</a>
+    </nav>
+
+    <main>
+      <div id="error-banner" role="alert" hidden></div>
+
+      <section id="roster-panel" aria-labelledby="roster-label">
+        <p id="roster-label" class="section-label">Live trainee roster</p>
+        <section id="roster-list" aria-live="polite"></section>
+      </section>
+
+      <section id="add-student" aria-labelledby="add-student-label">
+        <p id="add-student-label" class="section-label">Add a trainee</p>
+        <form id="student-form">
+          <label>
+            Name
+            <input id="student-name" name="name" type="text" required maxlength="120" />
+          </label>
+          <label>
+            Email
+            <input id="student-email" name="email" type="email" required maxlength="255" />
+          </label>
+          <label>
+            Age
+            <input id="student-age" name="age" type="number" min="1" required />
+          </label>
+          <button type="submit">Add trainee</button>
+        </form>
+      </section>
+
+      <section id="ai-helper" aria-labelledby="ai-helper-label">
+        <p id="ai-helper-label" class="section-label">AI Helper</p>
+        <div class="ai-helper-grid">
+          <form id="summary-form" class="ai-form">
+            <label for="notes-input">Study notes</label>
+            <textarea id="notes-input" rows="7" placeholder="Paste study notes to summarize"></textarea>
+            <button type="submit">Summarize</button>
+          </form>
+          <div id="summary-result" class="assistant-result" aria-live="polite"></div>
+
+          <form id="note-search-form" class="ai-form">
+            <label for="note-query">Search study notes</label>
+            <input id="note-query" type="search" placeholder="e.g. binary search" />
+            <button type="submit">Search Notes</button>
+          </form>
+          <div id="note-search-results" class="assistant-result" aria-live="polite"></div>
+        </div>
+      </section>
+    </main>
+
+    <footer>StudyTrack · Myntra Trainee Enablement</footer>
+    <script src="app.js"></script>
+  </body>
+</html>

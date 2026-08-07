@@ -4,4 +4,5 @@ __pycache__/
 *.py[cod]
 backend/studytrack.db
 .env
+.env.example
 .DS_Store
