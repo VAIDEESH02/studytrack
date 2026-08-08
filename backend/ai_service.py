@@ -83,7 +83,7 @@ def _summarize_with_gemini(raw_text: str) -> dict[str, object]:
     try:
 
         client = genai.Client(api_key=api_key)
-        config = types.GenerateContentConfig()
+        config = types.GenerateContentConfig(response_mime_type="application/json")
         response = client.models.generate_content(
             model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
             contents=f"{REAL_SUMMARY_PROMPT}{raw_text}",
