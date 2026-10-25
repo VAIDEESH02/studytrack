@@ -4,44 +4,49 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-StudyTrack is a two-process FastAPI + SQLite dashboard for Myntra's Trainee Enablement team: a plain-JavaScript frontend that always talks to this repo's own FastAPI backend at `http://localhost:8000` (never a third-party roster API).
+StudyTrack is a FastAPI + SQLAlchemy dashboard for Myntra's Trainee Enablement team, with a plain-JavaScript frontend. Only approved users can sign in; there is no public sign-up. Locally the frontend calls this repo's backend at `http://<same host>:8000`. In production the frontend is on Netlify and calls `/api/*`, which Netlify proxies to the Render backend (never a third-party roster API). Production data lives in Postgres (Neon); local development defaults to SQLite.
 
 ## Commands
 
-Run from the `studytrack` root, backend first (in `venv`):
+Run from the `studytrack` root (in `venv`):
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -r backend/requirements.txt
-python -m backend.seed_data --reset
-uvicorn backend.main:app --reload --port 8000
+pip install -r requirements-dev.txt          # backend deps + test/lint tools
+cp .env.example .env                         # then set BOOTSTRAP_ADMIN_EMAIL / _PASSWORD
+uvicorn backend.main:app --reload --port 8000 --env-file .env
 ```
 
-Then, in a second terminal, serve the frontend on the CORS-approved local origin:
+Second terminal: `python3 -m http.server 5500 --directory frontend`, then open `http://127.0.0.1:5500` (or `localhost:5500`; use 127.0.0.1 if another service such as ChromaDB holds `localhost:8000` on IPv6). API docs: `http://localhost:8000/docs` (disabled in production).
 
-```bash
-python3 -m http.server 5500 --directory frontend
-```
-
-Open `http://localhost:5500`. API docs are auto-generated at `http://localhost:8000/docs`.
-
-There are no test files, linter, or formatter configured in this repo.
+- Tests: `pytest` (unit + API, 120+ tests, temp SQLite). `TEST_DATABASE_URL=postgresql://... pytest` runs the same suite on Postgres. Tests never read `DATABASE_URL`.
+- Browser tests: `pytest -m e2e` (Playwright; starts its own servers on 8000/5500; first run `python -m playwright install chromium`).
+- Lint/format: `ruff check . && ruff format --check .`
+- Accounts: `python -m backend.manage create-user --email you@x.com --name "You" --role admin`; `... set-password --email ...`.
+- Demo data: `python -m backend.seed_data --reset` (replaces trainees/courses, never users).
+- Migrations: `alembic revision --autogenerate -m "..."` then review the file. The app runs `upgrade head` on startup.
 
 ## Architecture
 
-- `backend/main.py` — all FastAPI routes live here directly (no router modules). CORS origins come from `ALLOWED_ORIGINS` (comma-separated) and are never wildcarded. `Base.metadata.create_all` + `seed_database()` run on startup, so the schema and demo data are always ready without a separate migration step.
-- `backend/models.py` — SQLAlchemy ORM: `Student` 1—many `Course`, with `cascade="all, delete-orphan"` and a DB-level `CheckConstraint` on `credits` (1–6).
-- `backend/schemas.py` — Pydantic request/response contracts, kept deliberately separate from the ORM models (`StudentCreate`/`StudentUpdate`/`StudentRead`, etc.).
-- `backend/crud.py` — the only place that talks to the DB session; routes never build SQLAlchemy statements themselves. `course_count_for_student` intentionally uses `select(func.count(...))` so the aggregate runs in SQL, not Python.
-- `backend/database.py` — engine/session setup. SQLite foreign keys are off by default and are turned on explicitly via a `PRAGMA foreign_keys=ON` connect event.
-- `backend/algorithms.py` — hand-written (not stdlib) Insertion Sort, iterative Binary Search, and reporting helpers, applied to the *live* DB roster after routes load it into plain dicts via `main.student_records()`. Binary search requires the list to already be sorted by the search field. These exist to demonstrate the algorithms explicitly, not for performance.
-- `backend/ai_service.py` — the "AI Helper": fully offline, deterministic **mock mode** by default (no LLM/embedding calls). `AI_MODE=real` + `GOOGLE_API_KEY` switches `summarize_notes` to call Gemini via the `google-genai` SDK; `search_notes` always stays mock (fixed 12-word vocabulary vectors + hand-written cosine similarity) regardless of `AI_MODE`. The `notes` list here is a separate static in-memory dataset, unrelated to the `students`/`courses` DB tables.
-- `backend/seed_data.py` — idempotent demo-data seeding, also invoked as `python -m backend.seed_data --reset`.
-- `frontend/app.js` — vanilla JS, no framework/build step. `API_BASE_URL` must be updated by hand when pointing at a deployed backend (paired with updating `ALLOWED_ORIGINS` on that backend to the exact deployed frontend origin).
+- `backend/main.py` — all routes, grouped into three `APIRouter`s in this file: `public` (`/health`, `/auth/login`, `/auth/logout`), `protected` (router-level `Depends(auth.current_user)`; everything else), and `admin` (`/users/*`, requires the admin role). Startup uses a `lifespan` handler: Alembic migrations, bootstrap admin from env, demo seed. CORS origins come from `ALLOWED_ORIGINS` and are never wildcarded.
+- `backend/auth.py` — Argon2 password hashing (`pwdlib`), HS256 JWT session tokens (`PyJWT`) in an HttpOnly `SameSite=Lax` cookie (`Secure` in production), `current_user` / `require_admin` dependencies, in-memory per-email login throttle, startup settings check, bootstrap admin. Each token carries `users.token_version`; bumping it revokes every session for that user (password, role, or status change).
+- `backend/models.py` — `Student` 1—many `Course` (`cascade="all, delete-orphan"`, DB `CheckConstraint` on credits 1–6) and `User` (role check constraint, `is_active`, `token_version`).
+- `backend/schemas.py` — Pydantic contracts, separate from the ORM. Input strings are whitespace-stripped; ids and ages are bounded so Postgres INTEGER never overflows.
+- `backend/crud.py` — the only place that talks to the DB session; routes never build SQLAlchemy statements. PATCH helpers ignore explicit nulls. `course_count_for_student` uses `select(func.count(...))` so the aggregate runs in SQL.
+- `backend/database.py` — engine/session, `postgres://` URL normalization to psycopg 3, SQLite `PRAGMA foreign_keys=ON`, and `run_migrations()` (stamps pre-Alembic SQLite files at the baseline before upgrading).
+- `backend/migrations/` — Alembic. `env.py` reuses the app engine, so `DATABASE_URL` is the only DB setting. `tests/test_migrations.py` fails if models and migrations drift.
+- `backend/algorithms.py` — hand-written Insertion Sort, iterative Binary Search, and reporting helpers applied to the live roster via `main.student_records()`. They exist to demonstrate the algorithms, not for performance; keep them hand-written.
+- `backend/ai_service.py` — mock mode by default (offline, deterministic). `AI_MODE=real` + `GOOGLE_API_KEY` makes `summarize_notes` call Gemini (SDK imported lazily, structured output). `search_notes` is always mock. `notes` is a static dataset unrelated to the DB.
+- `backend/manage.py` — account CLI. `backend/seed_data.py` — idempotent demo seeding.
+- `frontend/` — vanilla ES modules, no build step. `js/config.js` picks the API base (local port 8000 vs `/api`), `js/api.js` is the only fetch wrapper (cookies, 401 redirect, 422 field errors, cold-start retries), `js/ui.js` holds DOM helpers, `js/router.js` hash routes, `js/views/*` one module per page. `login.html` is the sign-in page. `_redirects` (API proxy) and `_headers` (CSP etc.) are Netlify config.
+- Deployment: `render.yaml` (API), `netlify.toml` + `frontend/_redirects` (site), `.github/workflows/ci.yml` (lint, tests on SQLite + Postgres, e2e, pip-audit), `deploy.yml` (CI, then Render deploy hook for the exact commit, wait for `/health` version, Netlify CLI deploy, live smoke test).
 
 ## Conventions specific to this repo
 
-- Error mapping is centralized: `IntegrityError` from CRUD calls is translated to HTTP status codes by `integrity_error_to_http_error` in `main.py` by pattern-matching the DB driver's error message (unique+email → 409, foreign key → 422, credits/check constraint → 422, else 400). Add new constraint-driven errors there rather than inline in a route.
-- Every mutating route (`create_student`, `patch_student`, `remove_student`, and the `courses/` equivalents) logs one INFO line via the module-level `logger` after success — keep new mutating routes consistent with that.
-- `AI_MODE` and `GOOGLE_API_KEY` are read from the process environment only; no API key is ever committed, and `.env` is gitignored. `.env.example` documents the expected variables.
+- New routes go on the `protected` (or `admin`) router. `tests/test_auth.py::test_every_non_public_route_requires_sign_in` walks `app.routes` and fails if a non-public route answers without a session.
+- Error mapping is centralized in `integrity_error_to_http_error` in `main.py`: Postgres SQLSTATE (`23505`/`23503`/`23514`) with SQLite message fallback; it returns the `HTTPException` and callers `raise ... from error`. Add new constraint-driven errors there and a case to `tests/test_error_mapping.py`.
+- Every mutating route logs one INFO line via the module-level `logger` after success (students, courses, users, sign-in, password changes). Never log passwords, tokens, or failed-login emails.
+- Secrets (`SECRET_KEY`, `DATABASE_URL`, `BOOTSTRAP_ADMIN_PASSWORD`, `GOOGLE_API_KEY`) come from the environment only; `.env` is gitignored and `.env.example` documents every variable. This repository is public.
+- Frontend: never use `innerHTML` with data; build DOM with `el()` / `textContent`. No inline `<script>` or `style=""` (the production CSP forbids them); set CSS custom properties through `element.style.setProperty`. Colors come from `css/tokens.css`.
+- Schema changes need an Alembic migration; `create_all` is not used by the app.
