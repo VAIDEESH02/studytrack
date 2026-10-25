@@ -1,0 +1,127 @@
+# Continuous deployment. On every push to main:
+#   1. run the full CI workflow on that commit,
+#   2. deploy exactly that commit to Render and wait until /health reports it,
+#   3. publish frontend/ to Netlify (after the API, so new UI never talks to an old API),
+#   4. smoke-test the live site: the proxy works, Render refuses direct calls, sign-in works.
+#
+# Setup (GitHub > Settings > Environments > "production"):
+#   secrets:   RENDER_DEPLOY_HOOK_URL, NETLIFY_AUTH_TOKEN, NETLIFY_SITE_ID,
+#              SMOKE_EMAIL, SMOKE_PASSWORD (a member account used only by the smoke test)
+#   variables: RENDER_API_URL (https://<service>.onrender.com), SITE_URL (https://<site>.netlify.app)
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  backend:
+    name: Deploy API to Render
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      RENDER_API_URL: ${{ vars.RENDER_API_URL }}
+    steps:
+      - name: Check configuration
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          test -n "$RENDER_DEPLOY_HOOK_URL" || { echo "::error::Set the RENDER_DEPLOY_HOOK_URL secret on the production environment"; exit 1; }
+          test -n "$RENDER_API_URL" || { echo "::error::Set the RENDER_API_URL variable on the production environment"; exit 1; }
+      - name: Deploy this commit
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: curl --fail --silent --show-error --request POST "${RENDER_DEPLOY_HOOK_URL}&ref=${GITHUB_SHA}" > /dev/null
+      - name: Wait until Render serves this commit
+        run: |
+          for attempt in $(seq 1 60); do
+            version=$(curl --silent --max-time 30 "${RENDER_API_URL%/}/health" | jq -r '.version // empty' 2>/dev/null || true)
+            # Accept a full or abbreviated SHA: GITHUB_SHA must start with the reported version.
+            if [ ${#version} -ge 7 ] && [ "${GITHUB_SHA#"$version"}" != "$GITHUB_SHA" ]; then
+              echo "Render is serving $version"
+              exit 0
+            fi
+            echo "Attempt $attempt/60: live version is '${version:-unreachable}', waiting for $GITHUB_SHA"
+            sleep 10
+          done
+          echo "::error::Render did not start serving $GITHUB_SHA within 10 minutes. Check the Render deploy logs."
+          exit 1
+
+  frontend:
+    name: Deploy site to Netlify
+    needs: backend
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+      - name: Point the /api proxy at the Render service
+        env:
+          RENDER_API_URL: ${{ vars.RENDER_API_URL }}
+        run: |
+          sed -i "s#https://studytrack-api.onrender.com#${RENDER_API_URL%/}#g" netlify.toml
+          grep -n '^  to = ' netlify.toml
+      - name: Publish to Netlify
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          npx --yes netlify-cli@27.14.2 deploy --prod --no-build --dir=frontend \
+            --site="$NETLIFY_SITE_ID" --auth="$NETLIFY_AUTH_TOKEN" --message="Deploy ${GITHUB_SHA::7}"
+
+  smoke:
+    name: Smoke test the live site
+    needs: frontend
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      SITE_URL: ${{ vars.SITE_URL }}
+      RENDER_API_URL: ${{ vars.RENDER_API_URL }}
+    steps:
+      - name: Health through the Netlify proxy reports this commit
+        run: |
+          body=$(curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors "${SITE_URL%/}/api/health")
+          echo "$body"
+          version=$(echo "$body" | jq -r .version)
+          [ ${#version} -ge 7 ] && [ "${GITHUB_SHA#"$version"}" != "$GITHUB_SHA" ]
+      - name: Netlify-signed requests reach the API, which still requires a session
+        run: |
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' "${SITE_URL%/}/api/students/")
+          echo "Via Netlify /api/students/ -> $code"
+          test "$code" = "401" || { echo "::error::Expected 401. A 403 means Netlify isn't signing requests: check PROXY_SIGNING_SECRET in Netlify (scope must include Runtime)."; exit 1; }
+      - name: Calling Render directly is refused (origin lock)
+        run: |
+          for path in students/ docs auth/me; do
+            code=$(curl --silent --output /dev/null --write-out '%{http_code}' "${RENDER_API_URL%/}/$path")
+            echo "Direct /$path -> $code"
+            test "$code" = "403" || { echo "::error::Render answered /$path with $code instead of 403. Check PROXY_SIGNING_SECRET on Render."; exit 1; }
+          done
+      - name: Security headers are set
+        run: curl --silent --head "${SITE_URL%/}/login.html" | grep -i '^content-security-policy:'
+      - name: The smoke-test account can sign in and out through the proxy
+        env:
+          SMOKE_EMAIL: ${{ secrets.SMOKE_EMAIL }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
+        run: |
+          if [ -z "$SMOKE_EMAIL" ]; then
+            echo "::warning::SMOKE_EMAIL is not set, so the sign-in check was skipped"
+            exit 0
+          fi
+          jar=$(mktemp)
+          payload=$(jq -n --arg email "$SMOKE_EMAIL" --arg password "$SMOKE_PASSWORD" '{email: $email, password: $password}')
+          curl --fail --silent --show-error --cookie-jar "$jar" --header 'Content-Type: application/json' \
+            --header "Origin: ${SITE_URL%/}" --data "$payload" "${SITE_URL%/}/api/auth/login" > /dev/null
+          curl --fail --silent --show-error --cookie "$jar" "${SITE_URL%/}/api/auth/me" | jq -e '.email' > /dev/null
+          curl --fail --silent --show-error --cookie "$jar" --request POST "${SITE_URL%/}/api/auth/logout" > /dev/null

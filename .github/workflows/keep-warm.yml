@@ -1,0 +1,22 @@
+# Optional: ping the API every 10 minutes so the free Render instance never spins down
+# (a cold start takes about a minute). Turn it on by setting the repository variable
+# KEEP_WARM=true. One always-on free service fits within Render's 750 free hours a month.
+# GitHub may delay scheduled runs and pauses them after 60 days without repository activity.
+name: Keep API warm
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    if: vars.KEEP_WARM == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health
+        env:
+          RENDER_API_URL: ${{ vars.RENDER_API_URL }}
+        run: curl --silent --show-error --max-time 90 --retry 2 "${RENDER_API_URL%/}/health"
