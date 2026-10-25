@@ -1,0 +1,8 @@
+# Everything needed to lint and test locally and in CI. Production installs backend/requirements.txt only.
+-r backend/requirements.txt
+httpx2==2.16.0
+pip-audit==2.10.1
+pytest==9.1.1
+pytest-cov==7.1.0
+pytest-playwright==0.10.0
+ruff==0.17.2

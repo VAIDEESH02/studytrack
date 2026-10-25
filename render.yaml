@@ -1,0 +1,46 @@
+# Render Blueprint for the StudyTrack API.
+# Create it once from the Render dashboard: New > Blueprint > pick this repository.
+#
+# Deploys are triggered by GitHub Actions (.github/workflows/deploy.yml) through the service's
+# deploy hook after CI passes, so Render's own auto-deploy is off.
+# Schema migrations, the first admin account, and demo seeding all run in the app's startup hook.
+
+services:
+  - type: web
+    name: studytrack-api
+    runtime: python # version pinned by .python-version (3.13); Render's default is newer
+    region: singapore # closest Render region to India; pick the same region for Neon
+    plan: free # spins down after ~15 idle minutes; any paid plan removes that with no code change
+    branch: main
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"
+    healthCheckPath: /health
+    autoDeployTrigger: "off" # quoted: YAML would otherwise read off as false
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY # signs session cookies; Render generates a random 256-bit value
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: SESSION_HOURS
+        value: "8"
+      - key: ALLOWED_ORIGINS # browsers reach the API through the Netlify proxy; set this to your Netlify URL
+        value: https://studytrack.netlify.app
+      - key: SEED_DEMO_DATA # "false" to start with an empty roster
+        value: "true"
+      - key: AI_MODE # "real" plus GOOGLE_API_KEY enables Gemini summaries
+        value: mock
+      - key: GEMINI_MODEL
+        value: gemini-3.6-flash
+      # Secrets: Render asks for these when the Blueprint is created. They are never committed.
+      - key: DATABASE_URL # Neon "direct" connection string, for example postgresql://...neon.tech/neondb?sslmode=require
+        sync: false
+      - key: BOOTSTRAP_ADMIN_EMAIL # first administrator, created only while the users table is empty
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD # 12+ characters; delete this variable after your first sign-in
+        sync: false
+      - key: BOOTSTRAP_ADMIN_NAME
+        sync: false
+      - key: GOOGLE_API_KEY # optional; only used when AI_MODE=real
+        sync: false

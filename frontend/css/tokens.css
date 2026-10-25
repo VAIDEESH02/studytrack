@@ -1,0 +1,95 @@
+/* Design tokens. Every color, radius, and shadow in app.css comes from here.
+   Accent pink keeps the Myntra feel while meeting WCAG AA for text on both themes. */
+
+:root {
+  color-scheme: light;
+
+  --bg: #f7f5f6;
+  --surface: #ffffff;
+  --surface-sunken: #f2eef0;
+  --surface-hover: #faf5f7;
+  --border: #e4dce0;
+  --border-strong: #c9bdc3;
+
+  --text: #1f1a1e;
+  --text-secondary: #4f4550;
+  --text-muted: #6e6370;
+
+  --accent: #cc1f56;
+  --accent-hover: #ad1747;
+  --accent-soft: #fde9f0;
+  --accent-track: #f7d3df;
+  --on-accent: #ffffff;
+
+  --danger: #b42318;
+  --danger-hover: #912018;
+  --danger-soft: #fef3f2;
+  --danger-border: #fecdca;
+  --success: #067647;
+  --success-soft: #ecfdf3;
+  --success-border: #abefc6;
+  --warning: #93370d;
+  --warning-soft: #fffaeb;
+  --warning-border: #fedf89;
+  --info: #1849a9;
+  --info-soft: #eff4ff;
+  --info-border: #c7d7fe;
+
+  --shadow-sm: 0 1px 2px rgb(31 26 30 / 6%);
+  --shadow-md: 0 1px 3px rgb(31 26 30 / 6%), 0 6px 16px rgb(31 26 30 / 7%);
+  --shadow-lg: 0 24px 48px rgb(31 26 30 / 20%);
+  --backdrop: rgb(20 14 18 / 45%);
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  --sidebar-width: 232px;
+  --topbar-height: 64px;
+  --tabbar-height: 64px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --bg: #121014;
+    --surface: #1b181d;
+    --surface-sunken: #161318;
+    --surface-hover: #231f25;
+    --border: #2f2932;
+    --border-strong: #4a414e;
+
+    --text: #f3eef2;
+    --text-secondary: #d2c8d0;
+    --text-muted: #a89ca6;
+
+    --accent: #ff6f96;
+    --accent-hover: #ff91af;
+    --accent-soft: #3a1823;
+    --accent-track: #4a2131;
+    --on-accent: #22070f;
+
+    --danger: #ff8a80;
+    --danger-hover: #ffaba3;
+    --danger-soft: #341614;
+    --danger-border: #6b2a24;
+    --success: #6ce9a6;
+    --success-soft: #0f2a1d;
+    --success-border: #1d5c3b;
+    --warning: #fdb022;
+    --warning-soft: #2e2208;
+    --warning-border: #5c4510;
+    --info: #84adff;
+    --info-soft: #14203a;
+    --info-border: #2b3f6b;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow-md: 0 1px 3px rgb(0 0 0 / 40%), 0 6px 16px rgb(0 0 0 / 35%);
+    --shadow-lg: 0 24px 48px rgb(0 0 0 / 55%);
+    --backdrop: rgb(0 0 0 / 60%);
+  }
+}

@@ -1,0 +1,7 @@
+# Netlify site settings. The frontend is plain static files, so there is no build step.
+# The /api proxy and the security headers live in frontend/_redirects and frontend/_headers so
+# they ship inside the published folder with every deploy method.
+
+[build]
+  publish = "frontend"
+  command = ""

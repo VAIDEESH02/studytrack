@@ -1,0 +1,5 @@
+# Same-origin API proxy. The browser only ever calls /api/* on the Netlify site; Netlify forwards
+# the request to Render server-side. This keeps the session cookie first-party (Safari blocks
+# third-party cookies between netlify.app and onrender.com) and the Render URL out of browser code.
+# The deploy workflow replaces this URL with the RENDER_API_URL repository variable when it is set.
+/api/*  https://studytrack-api.onrender.com/:splat  200!
