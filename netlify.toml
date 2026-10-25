@@ -1,0 +1,42 @@
+# Netlify site settings. The frontend is plain static files, so there is no build step.
+# Security headers live in frontend/_headers.
+
+[build]
+  publish = "frontend"
+  command = ""
+
+# Same-origin API proxy. The browser only ever calls /api/* on this site, and Netlify forwards the
+# request to Render server-side. That keeps the session cookie first-party (Safari blocks
+# third-party cookies between netlify.app and onrender.com) and the Render URL out of browser code.
+#
+# signed: Netlify adds an x-nf-sign header, an HS256 signature made with the value of the
+#   PROXY_SIGNING_SECRET environment variable in Netlify (its scopes must include Runtime).
+#   The API holds the same secret and refuses any request without a valid signature, so nobody
+#   can skip these rules by calling Render directly. Signed proxies only work in this file.
+# rate_limit: per-visitor-IP limits enforced by Netlify before anything reaches Render. The free
+#   plan allows two rules. The limits are generous because office staff often share one IP.
+#
+# The first matching rule wins, so the stricter sign-in rule must stay above the catch-all.
+# The deploy workflow replaces the Render URL below with the RENDER_API_URL repository variable.
+
+[[redirects]]
+  from = "/api/auth/login"
+  to = "https://studytrack-api.onrender.com/auth/login"
+  status = 200
+  force = true
+  signed = "PROXY_SIGNING_SECRET"
+  [redirects.rate_limit]
+    window_limit = 20
+    window_size = 60
+    aggregate_by = ["ip", "domain"]
+
+[[redirects]]
+  from = "/api/*"
+  to = "https://studytrack-api.onrender.com/:splat"
+  status = 200
+  force = true
+  signed = "PROXY_SIGNING_SECRET"
+  [redirects.rate_limit]
+    window_limit = 300
+    window_size = 60
+    aggregate_by = ["ip", "domain"]

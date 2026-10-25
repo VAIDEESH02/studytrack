@@ -1,75 +1,197 @@
 # StudyTrack
 
-StudyTrack is a two-process FastAPI + SQLite dashboard for Myntra's Trainee Enablement team. The plain JavaScript dashboard always calls this repository's FastAPI server at `http://localhost:8000`; it never uses a third-party roster API.
+StudyTrack is the trainee roster dashboard for Myntra's Trainee Enablement team. A FastAPI backend stores trainees, their course enrollments, and user accounts. A plain-JavaScript frontend with no build step lets signed-in staff manage the roster, run reports, and use a small AI study helper.
+
+Only approved accounts can sign in. There is no public sign-up: administrators create users from the **Users** page.
+
+```
+Browser ──HTTPS──> Netlify  (static frontend/, security headers)
+                     └─ /api/* proxy ──HTTPS──> Render web service (FastAPI + uvicorn)
+                                                  └─ Neon Postgres
+GitHub Actions: pull request → lint, tests on SQLite and Postgres, browser tests, dependency audit
+                push to main → the same CI → deploy API → deploy site → smoke-test the live site
+```
+
+The browser only ever talks to the Netlify site. Netlify forwards `/api/*` to Render on the server side. That keeps the session cookie first-party (Safari blocks third-party cookies between `netlify.app` and `onrender.com`) and keeps the Render URL out of the frontend code. Netlify signs every request it forwards, and the API refuses anything unsigned, so the Render URL is useless on its own. Every API route except `/health`, `/auth/login`, and `/auth/logout` also requires a valid session, and the interactive docs are turned off in production.
 
 ## Run locally
 
-From the `studytrack` directory, create the virtual environment and install the committed, pinned requirements:
+From the repository root:
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -r backend/requirements.txt
-python -m backend.seed_data --reset
-uvicorn backend.main:app --reload --port 8000
+pip install -r requirements-dev.txt
+cp .env.example .env
 ```
 
-In a second terminal (also from `studytrack`), serve the frontend on the CORS-approved local origin:
+Edit `.env` and set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` (12 or more characters). That account is created the first time the API starts with an empty users table. You can also create accounts at any time with the CLI:
+
+```bash
+python -m backend.manage create-user --email you@myntra.com --name "Your Name" --role admin
+```
+
+Start the API. It migrates the database and seeds the demo roster on startup.
+
+```bash
+uvicorn backend.main:app --reload --port 8000 --env-file .env
+```
+
+In a second terminal, serve the frontend:
 
 ```bash
 python3 -m http.server 5500 --directory frontend
 ```
 
-Open `http://localhost:5500`. FastAPI seeds the roster at startup as well, but `python -m backend.seed_data --reset` is the repeatable demo-seeding command. API documentation is at `http://localhost:8000/docs`.
+Open `http://127.0.0.1:5500` and sign in. `http://localhost:5500` works too, unless another program, such as ChromaDB, is listening on `localhost:8000`. The API docs are at `http://localhost:8000/docs`.
 
-For a deployed frontend, change `API_BASE_URL` in `frontend/app.js` to the deployed Render API URL and set `ALLOWED_ORIGINS` on the backend to include the exact Netlify origin. CORS deliberately names origins and never permits `*`.
+To reset the demo trainees and courses (user accounts are kept), run `python -m backend.seed_data --reset`.
+
+If you have a `backend/studytrack.db` from before sign-in was added, it is upgraded in place on first start.
+
+## Tests and linting
+
+```bash
+ruff check . && ruff format --check .      # lint and formatting
+pytest                                     # unit and API tests on a temporary SQLite database
+pytest --cov=backend                       # the same, with coverage
+python -m playwright install chromium      # once, before the browser tests
+pytest -m e2e                              # browser tests; they start their own servers on 8000 and 5500
+```
+
+To run the suite against Postgres, start one (for example `docker run --rm -e POSTGRES_PASSWORD=postgres -p 55432:5432 postgres:17`) and run `TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/postgres pytest`. The tests never read `DATABASE_URL`, so they cannot touch a real database by accident.
+
+## Deploy
+
+GitHub Actions is the only thing that publishes code. Render's auto-deploy is off (`autoDeployTrigger: "off"` in `render.yaml`) and the Netlify site has no Git builds, so nothing reaches production without passing CI.
+
+### One-time setup
+
+Do these in order. Generate each secret with `python -c "import secrets; print(secrets.token_urlsafe(48))"` and keep it in a password manager.
+
+0. **Secure the accounts.** Turn on two-factor sign-in for GitHub, Render, Netlify, and Neon. In GitHub > Settings > Applications, limit the Render and Netlify GitHub apps to only this repository. In this repository's Settings > Code security, enable secret scanning, push protection, and Dependabot alerts.
+1. **Open a pull request** from your feature branch. Wait for the five CI checks to pass, then merge. The Deploy workflow will run and stop at "Check configuration" because no secrets exist yet. That is expected and deploys nothing.
+2. **Database (Neon, free).** Create a project in AWS Singapore and copy the **direct** (not pooled) connection string. Render's free Postgres is deleted after 30 days, and Render's free disk is wiped on every restart, so SQLite is not an option there.
+3. **API (Render).** Go to New > Blueprint and pick this repository; `render.yaml` describes the service. When prompted, enter `DATABASE_URL`, `PROXY_SIGNING_SECRET`, `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, and `BOOTSTRAP_ADMIN_NAME`. Leave `GOOGLE_API_KEY` empty unless you want Gemini summaries. In the first deploy's logs, look for "Running upgrade" and "Created bootstrap admin". Copy the service URL (it gets a suffix if `studytrack-api` was taken) and, under Settings, the **Deploy Hook** URL.
+4. **Site (Netlify).** Create the site with Add new site > Deploy manually, so it has no Git builds. If you already made a Git-linked site, open Site configuration > Build & deploy > Continuous deployment and choose **Stop builds** instead. Under Site configuration > Environment variables, add `PROXY_SIGNING_SECRET` with the same value as on Render; its scopes must include **Runtime**. Note the site URL and **Site ID**, and create a personal access token under User settings > Applications.
+5. **Back on Render,** set `ALLOWED_ORIGINS` to the Netlify URL.
+6. **GitHub.** Under Settings > Environments, create `production` and add:
+   - secrets: `RENDER_DEPLOY_HOOK_URL`, `NETLIFY_AUTH_TOKEN`, `NETLIFY_SITE_ID`
+   - variables: `RENDER_API_URL` (for example `https://studytrack-api.onrender.com`) and `SITE_URL` (for example `https://studytrack.netlify.app`)
+
+   Then protect `main` under Settings > Branches: require pull requests and the checks **Lint**, **Tests (sqlite)**, **Tests (postgres)**, **Browser tests**, and **Dependency audit**.
+7. **Deploy.** Open Actions > Deploy > Run workflow. The backend, frontend, and smoke jobs should all pass; the sign-in smoke check is skipped until the next step.
+8. **First sign-in.** Open the Netlify URL, sign in as the bootstrap admin, and create real accounts plus a `member` account used only by the smoke test. Add its credentials as `SMOKE_EMAIL` and `SMOKE_PASSWORD` secrets on the `production` environment. Delete `BOOTSTRAP_ADMIN_PASSWORD` from Render, then run the Deploy workflow once more.
+9. **Monitoring.** Add a free uptime check (UptimeRobot or similar) on `https://<site>/api/health` every 5 minutes with email alerts; it also keeps the free instance warm. Turn on Render's notifications for failed deploys.
+
+### How a change goes live
+
+Open a pull request: `.github/workflows/ci.yml` runs lint, the tests on SQLite and Postgres, the browser tests, and `pip-audit`. Merge to `main`: `.github/workflows/deploy.yml` runs CI again on the merged commit, then:
+
+1. triggers Render's deploy hook for exactly that commit and waits until `/health` reports it,
+2. publishes `frontend/` to Netlify with the CLI, after pointing the proxy rules in `netlify.toml` at `RENDER_API_URL`,
+3. checks the live site: health through the proxy, 401 without a session, 403 when calling Render directly, a CSP header, and a real sign-in with the smoke account.
+
+### Free-tier cold starts
+
+A free Render instance sleeps after about 15 idle minutes and takes about a minute to wake. Netlify gives up on a proxied request after 26 seconds. The frontend handles this: the sign-in page wakes the API while you type, and read requests retry for up to 90 seconds behind a "Waking up the server" banner. To avoid cold starts entirely, use the uptime check above, set the repository variable `KEEP_WARM=true` to enable `.github/workflows/keep-warm.yml`, or move the service to a paid Render plan.
+
+### Check the protections on the live site
+
+```bash
+curl -i https://<render>/students/        # 403: direct calls to Render are refused
+curl -i https://<render>/health           # 200 with the deployed commit
+curl -i https://<site>/api/students/      # 401: signed by Netlify, but no session
+for i in $(seq 25); do curl -s -o /dev/null -w "%{http_code} " -H 'Content-Type: application/json' \
+  -d '{"email":"x@y.z","password":"wrong"}' https://<site>/api/auth/login; done   # 401s, then 429
+```
+
+## Security model
+
+Protection is layered, so each request has to pass every layer before it reaches the data.
+
+| Layer | What it does | Where it lives |
+| --- | --- | --- |
+| Network | Cloudflare absorbs network-level DDoS floods, on every Render plan | Render, automatic |
+| Edge | Netlify limits each visitor IP to 20 sign-in attempts and 300 API requests a minute | `netlify.toml` |
+| Origin lock | Netlify signs every request it forwards. The API refuses unsigned requests with a 403 before doing any work, so calling the Render URL directly gets nowhere. Only `GET /health` is exempt, for Render's health checks | `netlify.toml`, `backend/edge.py` |
+| Application | A session is required on every route except health, sign-in, and sign-out. Five failed sign-ins lock an email for 15 minutes. At most two password hashes run at once, and request bodies are capped at 256 KB | `backend/auth.py`, `backend/edge.py` |
+| Data | Neon only accepts TLS connections. Every secret lives in environment variables | Neon, Render, Netlify |
+| Accounts | Two-factor sign-in, GitHub apps limited to this repository, branch protection, secret scanning, Dependabot, and `pip-audit` in CI | GitHub, Render, Netlify, Neon |
+
+More detail:
+
+- Passwords are hashed with Argon2. Sessions are signed JWTs in an `HttpOnly`, `SameSite=Lax`, `Secure` cookie that page scripts cannot read. They last `SESSION_HOURS` (default 8).
+- Sign-in errors never reveal whether an email exists. Failed attempts are logged with the visitor's IP as reported by Netlify, never with the email.
+- Changing a password, role, or active status signs that user out everywhere.
+- Administrators manage users. They cannot deactivate or demote themselves, so at least one active admin always remains.
+- Netlify deploy previews carry a different signature context, so they can never reach production data.
+- The site sends a strict Content-Security-Policy, `nosniff`, `DENY` framing, and a referrer policy (`frontend/_headers`). API responses add `Cache-Control: no-store` and, in production, HSTS.
+- This repository is public. `.env` is gitignored; never commit one.
+
+Known trade-off: anyone who knows an account's email can lock it for 15 minutes with five wrong passwords. That is accepted in exchange for stopping password guessing.
 
 ## API endpoints
 
-All JSON responses use these shapes:
+All responses are JSON. Everything except the first three rows requires the session cookie set by `POST /auth/login`; without it the API answers 401.
 
-```json
-// Student
-{"id": 1, "name": "Aditi Rao", "email": "aditi.rao@example.com", "age": 22}
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/health` | Public. `{"status":"ok","version":"<deployed commit>"}` |
+| POST | `/auth/login` | Public. `{"email","password"}` → user, sets the cookie. 401 bad credentials, 429 locked out |
+| POST | `/auth/logout` | Public. Clears the cookie. 204 |
+| GET | `/auth/me` | The signed-in user |
+| POST | `/auth/change-password` | `{"current_password","new_password"}` → 204 |
+| GET | `/users/` | Admin only. All accounts |
+| POST | `/users/` | Admin only. `{"email","full_name","password","role"}` → 201 |
+| PATCH | `/users/{id}` | Admin only. Any of `full_name`, `role`, `is_active`, `password` |
+| POST | `/students/` | `{"name","email","age"}` → 201. 409 duplicate email |
+| GET | `/students/` | Optional `?min_age=20` |
+| GET | `/students/sorted?by=age` | `by` is `age` or `name`; insertion-sorted |
+| GET | `/students/search?name=Priya%20Iyer` | Exact, case-sensitive binary search. 404 when absent |
+| GET | `/students/report?min_age=21` | `{"report":"…","count_meeting_min_age":5}` |
+| GET | `/students/{id}` | 404 when absent |
+| PATCH | `/students/{id}` | Any of `name`, `email`, `age` |
+| DELETE | `/students/{id}` | Also deletes the trainee's courses. 204 |
+| GET | `/students/{id}/course-count` | `{"student_id":1,"course_count":2}`, counted in SQL |
+| POST | `/courses/` | `{"course_name","credits","student_id"}` → 201 |
+| GET | `/courses/` | All enrollments |
+| GET | `/courses/{id}` | 404 when absent |
+| PATCH | `/courses/{id}` | Any of `course_name`, `credits`, `student_id` |
+| DELETE | `/courses/{id}` | 204 |
+| POST | `/assistant/summarize` | `{"text":"…"}` (up to 20,000 characters) → `{"topic","key_points","difficulty"}` |
+| GET | `/assistant/search?query=binary%20search` | Notes ranked by similarity |
 
-// Course enrollment
-{"id": 1, "course_name": "Retail Foundations", "credits": 3, "student_id": 1}
-```
+Validation errors return 422. Emails must contain `@`, ages must be 1–150, credits must be 1–6, and passwords need at least 12 characters. A course's `student_id` must reference an existing trainee (422 otherwise).
 
-| Method | Path | Request body | Success response |
-| --- | --- | --- | --- |
-| POST | `/students/` | `{"name":"…","email":"…@…","age":22}` | 201, Student |
-| GET | `/students/` | —; optional `?min_age=20` | 200, Student[] |
-| GET | `/students/sorted?by=age` | —; `by` is `age` or `name` | 200, insertion-sorted Student[] |
-| GET | `/students/search?name=Priya%20Iyer` | —; exact name required | 200, Student; 404 when absent |
-| GET | `/students/report?min_age=21` | —; optional minimum age | 200, `{"report":"…","count_meeting_min_age":5}` |
-| GET | `/students/{student_id}` | — | 200, Student |
-| PATCH | `/students/{student_id}` | Any subset of `name`, `email`, `age` | 200, Student |
-| DELETE | `/students/{student_id}` | — | 204, no body |
-| GET | `/students/{student_id}/course-count` | — | 200, `{"student_id":1,"course_count":2}` |
-| POST | `/courses/` | `{"course_name":"…","credits":3,"student_id":1}` | 201, Course |
-| GET | `/courses/` | — | 200, Course[] |
-| GET | `/courses/{course_id}` | — | 200, Course |
-| PATCH | `/courses/{course_id}` | Any subset of `course_name`, `credits`, `student_id` | 200, Course |
-| DELETE | `/courses/{course_id}` | — | 204, no body |
-| POST | `/assistant/summarize` | `{"text":"<raw notes>"}` | 200, `{"topic":"…","key_points":["…"],"difficulty":"easy"}` |
-| GET | `/assistant/search?query=binary%20search` | — | 200, ranked `[{"id":1,"text":"…","score":1.0}]` |
+## Where each endpoint appears in the app
 
-Missing student or course IDs return 404. Duplicate student emails return 409; invalid input returns FastAPI/Pydantic 422. The email validator requires `@`, ages must be positive, and credits must be 1–6.
-
-`GET /students/{student_id}/course-count` uses `select(func.count(Course.id)).where(Course.student_id == student_id)` in `backend/crud.py`, so SQL performs the aggregate; it never counts a Python list. The seeded Aditi record has two enrollments for a ready-made walkthrough.
+| Page | Endpoints it uses |
+| --- | --- |
+| Sign in | `/health` (wake-up check), `/auth/me`, `/auth/login` |
+| Every page | `/auth/me`, `/auth/logout`, `/auth/change-password` (account menu) |
+| Dashboard | `/students/`, `/courses/`, `/students/report`, plus add trainee and add course |
+| Trainees | `/students/` with minimum age, `/students/sorted`, `/students/search`, create, edit, and delete; the detail panel uses `/students/{id}`, `/students/{id}/course-count`, and the course endpoints |
+| Courses | `/courses/`, `/courses/{id}` (fresh copy before editing), create, edit, and delete |
+| Reports | `/students/report` |
+| AI Helper | `/assistant/summarize`, `/assistant/search` |
+| Users (admins) | `/users/` list, create, and edit |
 
 ## Algorithms engine
 
-`GET /students/sorted?by=age` loads the live database roster and applies the project’s in-place Insertion Sort; it returns Farhan, Rohan, Meera, Priya, Aditi, Devansh, Sameer, then Kavya by age. Insertion Sort is O(n²) in the worst case because a reverse-ordered list shifts nearly every prior item for each new item. Its best case is O(n) for an already sorted roster, because each outer-loop pass performs one comparison and no shifts. `GET /students/search?name=Priya%20Iyer` first builds a name-sorted copy, then runs the hand-written iterative Binary Search and returns Priya’s record. Binary Search requires the list to be sorted by the search field because its left-or-right decision discards half only when all smaller and larger values are predictably arranged. `GET /students/report?min_age=21` returns the multi-line roster and the visible-accumulator count, which is 5 for the seed data.
+`GET /students/sorted?by=age` loads the live roster and applies the project's in-place insertion sort. For the demo data it returns Farhan, Rohan, Meera, Priya, Aditi, Devansh, Sameer, then Kavya. Insertion sort is O(n²) in the worst case, because a reverse-ordered list shifts nearly every earlier item for each new one. Its best case is O(n) for an already sorted roster: each pass makes one comparison and no shifts.
+
+`GET /students/search?name=Priya%20Iyer` builds a name-sorted copy and runs the hand-written iterative binary search. Binary search needs the list sorted by the search field, because discarding half the range is only safe when smaller and larger values sit on predictable sides.
+
+`GET /students/report?min_age=21` returns one line per trainee and a visible-accumulator count, which is 5 for the demo data.
 
 ## AI Helper
 
-The grading demonstration uses the default **mock** mode: it is fully offline and makes no LLM or embedding API calls. The mock summarizer chooses the first non-empty note line as its title-like topic, takes up to three sentences split on `.`, `!`, or `?`, and rates difficulty as easy below 40 words, medium at 40–100 words, and hard above 100. `GET /assistant/search` uses fixed 12-word count vectors and a hand-written cosine calculation; an empty or out-of-vocabulary query returns all five notes at score `0.0` in id order. An optional real summarizer uses Google Gemini's `generate_content` endpoint through the `google-genai` Python SDK when `AI_MODE=real` and `GOOGLE_API_KEY` is set as a private environment variable; no API key is committed anywhere in this repository.
+By default the helper runs in **mock** mode: offline, deterministic, and with no LLM calls. The mock summarizer uses the first non-empty line as the topic and the first three sentences as key points. It rates difficulty as easy below 40 words, medium at 40–100, and hard above 100.
 
-To enable Gemini locally without adding a secret to a file, set `AI_MODE=real` and `GOOGLE_API_KEY` in the terminal environment before starting Uvicorn. `GEMINI_MODEL` is optional and defaults to `gemini-2.0-flash`.
+`GET /assistant/search` always runs offline. It builds 12-word count vectors and ranks the five sample notes by hand-written cosine similarity. For the query `binary`, note 1 scores 1/√5 ≈ 0.447, because that note says "search" twice and "binary" once. A query with no vocabulary words returns all five notes at score 0.0 in id order.
 
-If a real mode were enabled later, this is the exact structured prompt it would send to the LLM:
+Set `AI_MODE=real` and `GOOGLE_API_KEY` to have summaries generated by Google Gemini through the `google-genai` SDK, using structured JSON output. `GEMINI_MODEL` defaults to `gemini-3.6-flash`. The prompt sent to the model:
 
 ```text
 Task: Summarize the study notes below.
@@ -81,31 +203,16 @@ NOTES:
 {{raw_text}}
 ```
 
-## Dashboard walkthrough
+## Configuration
 
-1. Open `http://localhost:5500`; the initial `GET http://localhost:8000/students/` renders the seeded trainee cards.
-2. Change a card's inline age, click **Save Age**, and observe `PATCH /students/{id}` with `{"age": …}`. The card updates without a reload. The backend logs `Updated student id=…`.
-3. Submit the Add a trainee form. The `POST /students/` response is appended immediately as a new card; the backend logs `Created student id=…`.
-4. Click **Delete**. `DELETE /students/{id}` returns 204 and the card is removed; the backend logs `Deleted student id=…`.
-5. Stop the API or use browser offline mode. The dashboard shows the visible message “Could not reach the StudyTrack backend…” instead of relying on an alert or console output.
+Every setting is an environment variable; `.env.example` documents each one. The ones that matter most:
 
-The roster container and each card have explicit margin, padding, and borders. Its two-column layout switches to one column at widths below 600px.
-
-### Example API activity
-
-```text
-GET /students/                         200 OK
-GET /students/sorted?by=age            200 OK  Farhan Sheikh (18) … Kavya Nair (25)
-GET /students/search?name=Priya%20Iyer 200 OK  {"id":5,"name":"Priya Iyer","email":"priya.iyer@example.com","age":21}
-GET /students/report?min_age=21        200 OK  {"count_meeting_min_age":5,"report":"[Age 22] Aditi Rao <aditi.rao@example.com>…"}
-POST /assistant/summarize               200 OK  {"topic":"Binary Search","key_points":["Binary Search is fast"],"difficulty":"easy"}
-GET /assistant/search?query=binary      200 OK  [{"id":1,"score":0.7071067811865475,"text":"Binary search requires…"}, …]
-PATCH /students/1  {"age": 23}          200 OK  {"id":1,"name":"Aditi Rao","email":"aditi.rao@example.com","age":23}
-POST /students/  {"name":"Nila","email":"nila@myntra.com","age":21}
-                                        201 Created  {"id":6,"name":"Nila","email":"nila@myntra.com","age":21}
-DELETE /students/6                     204 No Content
-
-INFO Updated student id=1
-INFO Created student id=6
-INFO Deleted student id=6
-```
+| Variable | Local default | Production |
+| --- | --- | --- |
+| `ENVIRONMENT` | `development` | `production` (requires a 32+ character `SECRET_KEY` and secure cookies, and hides `/docs`) |
+| `SECRET_KEY` | temporary per-process key | generated by Render |
+| `DATABASE_URL` | `backend/studytrack.db` (SQLite) | Neon connection string |
+| `COOKIE_SECURE` | `false` | `true` |
+| `BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` | unset | first admin; remove the password after the first sign-in |
+| `SEED_DEMO_DATA` | `true` | `true` or `false` |
+| `AI_MODE` / `GOOGLE_API_KEY` | `mock` | `mock`, or `real` with a key |
