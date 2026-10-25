@@ -1,0 +1,26 @@
+# Tool configuration only. StudyTrack is not packaged; dependencies live in the requirements files.
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+extend-exclude = ["venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]  # the formatter owns line length; long literal strings are allowed
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Path", "fastapi.Query"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -m 'not e2e'"
+markers = ["e2e: browser tests that start the backend and frontend servers (run with: pytest -m e2e)"]
+
+[tool.coverage.run]
+source = ["backend"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
