@@ -20,6 +20,7 @@ for _name in (
     "COOKIE_SECURE",
     "ENABLE_DOCS",
     "GOOGLE_API_KEY",
+    "PROXY_SIGNING_SECRET",
     "RENDER_GIT_COMMIT",
     "SEED_DEMO_DATA",
     "SESSION_HOURS",

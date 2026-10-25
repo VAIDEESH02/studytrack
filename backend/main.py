@@ -16,12 +16,12 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Path, Response, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Path, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import ai_service, algorithms, auth, crud, models, schemas
+from . import ai_service, algorithms, auth, crud, edge, models, schemas
 from .database import SessionLocal, get_db, run_migrations
 from .seed_data import seed_if_empty
 
@@ -81,6 +81,11 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
+# Starlette runs the last-added middleware first, so a request passes through security headers,
+# then the Netlify origin lock, then the body-size cap, then CORS, before reaching any route.
+app.add_middleware(edge.BodySizeLimitMiddleware)
+app.add_middleware(edge.ProxySignatureMiddleware)
+app.add_middleware(edge.SecurityHeadersMiddleware)
 
 # Annotated with FastAPI's own `responses` type: dict keys are invariant, so an inferred
 # dict[int, ...] would not type-check against dict[int | str, ...].
@@ -150,12 +155,14 @@ def health():
     tags=["session"],
     responses={401: {"model": schemas.MessageRead}, 429: {"model": schemas.MessageRead}},
 )
-def login(payload: schemas.LoginRequest, response: Response, db: DbSession):
+def login(payload: schemas.LoginRequest, request: Request, response: Response, db: DbSession):
     """Check credentials and set the HttpOnly session cookie."""
+    # Logged so repeated attempts are visible in Render's logs. Emails are never logged.
+    client_ip = edge.trusted_client_ip(request) or "an unverified address"
     wait_seconds = auth.login_throttle.retry_after(payload.email)
     if wait_seconds:
         minutes = max(1, round(wait_seconds / 60))
-        logger.warning("Rejected sign-in for a locked-out email")
+        logger.warning("Rejected sign-in for a locked-out email from %s", client_ip)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Too many failed sign-in attempts. Try again in about {minutes} minute(s).",
@@ -164,7 +171,7 @@ def login(payload: schemas.LoginRequest, response: Response, db: DbSession):
     user = auth.authenticate(db, payload.email, payload.password)
     if user is None:
         auth.login_throttle.record_failure(payload.email)
-        logger.info("Failed sign-in attempt")
+        logger.info("Failed sign-in attempt from %s", client_ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
     auth.login_throttle.reset(payload.email)
     crud.record_login(db, user)
