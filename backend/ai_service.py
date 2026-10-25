@@ -1,4 +1,9 @@
-"""Offline, deterministic AI-helper functions for StudyTrack."""
+"""AI-helper functions for StudyTrack.
+
+``summarize_notes`` is offline and deterministic by default (mock mode). Setting
+``AI_MODE=real`` with ``GOOGLE_API_KEY`` makes it call Google Gemini instead.
+``search_notes`` is always offline: fixed-vocabulary vectors and hand-written cosine similarity.
+"""
 
 from __future__ import annotations
 
@@ -6,9 +11,13 @@ import json
 import math
 import os
 import re
-from typing import TypedDict
-from google import genai
-from google.genai import types
+from typing import Literal, TypedDict
+
+from pydantic import BaseModel
+
+# Gemini 2.0 and 2.5 models are retired. Override with GEMINI_MODEL without a code change.
+DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
+
 
 class StudyNote(TypedDict):
     id: int
@@ -21,11 +30,26 @@ class RankedNote(StudyNote):
 
 # This exact in-memory dataset is intentionally separate from the roster database.
 notes: list[StudyNote] = [
-    {"id": 1, "text": "Binary search requires a sorted array and repeatedly halves the search range using a midpoint comparison."},
-    {"id": 2, "text": "Insertion sort builds a sorted list one element at a time by shifting larger elements to the right."},
-    {"id": 3, "text": "FastAPI uses Pydantic models to validate request bodies and automatically generates Swagger documentation."},
-    {"id": 4, "text": "SQL joins combine rows from two tables using a matching column, such as inner join, left join, and full join."},
-    {"id": 5, "text": "Prompt engineering structures a task, context, constraints, and desired output format to guide an LLM's response."},
+    {
+        "id": 1,
+        "text": "Binary search requires a sorted array and repeatedly halves the search range using a midpoint comparison.",
+    },
+    {
+        "id": 2,
+        "text": "Insertion sort builds a sorted list one element at a time by shifting larger elements to the right.",
+    },
+    {
+        "id": 3,
+        "text": "FastAPI uses Pydantic models to validate request bodies and automatically generates Swagger documentation.",
+    },
+    {
+        "id": 4,
+        "text": "SQL joins combine rows from two tables using a matching column, such as inner join, left join, and full join.",
+    },
+    {
+        "id": 5,
+        "text": "Prompt engineering structures a task, context, constraints, and desired output format to guide an LLM's response.",
+    },
 ]
 
 VOCABULARY = [
@@ -54,8 +78,20 @@ NOTES:
 """
 
 
+class GeminiSummary(BaseModel):
+    """Structured-output schema handed to Gemini so it must answer in the summary shape."""
+
+    topic: str
+    key_points: list[str]
+    difficulty: Literal["easy", "medium", "hard"]
+
+
 class AIServiceError(RuntimeError):
     """Raised when explicitly requested real-mode generation cannot run."""
+
+
+def gemini_model() -> str:
+    return os.getenv("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL
 
 
 def _validate_real_summary(payload: object) -> dict[str, object]:
@@ -81,13 +117,20 @@ def _summarize_with_gemini(raw_text: str) -> dict[str, object]:
     if not api_key:
         raise AIServiceError("AI_MODE=real requires GOOGLE_API_KEY to be configured")
     try:
-
+        # Imported lazily so mock mode never loads the SDK.
+        from google import genai
+        from google.genai import types
+    except ImportError as error:
+        raise AIServiceError("AI_MODE=real requires the google-genai package") from error
+    try:
         client = genai.Client(api_key=api_key)
         config = types.GenerateContentConfig(
-            system_instruction="You are a helpful assistant.",
-            response_mime_type="application/json")
+            system_instruction="You summarize study notes for trainees and reply with JSON only.",
+            response_mime_type="application/json",
+            response_schema=GeminiSummary,
+        )
         response = client.models.generate_content(
-            model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+            model=gemini_model(),
             contents=f"{REAL_SUMMARY_PROMPT}{raw_text}",
             config=config,
         )
@@ -102,10 +145,11 @@ def _summarize_with_gemini(raw_text: str) -> dict[str, object]:
 
 
 def summarize_notes(raw_text: str) -> dict[str, object]:
-    """Return the fixed mock-summary shape without any network call.
+    """Summarize notes into ``{topic, key_points, difficulty}``.
 
-    The topic rule takes the first non-empty line as a title-like label. Difficulty
-    is easy for fewer than 40 words, medium for 40–100, and hard above 100.
+    In real mode this calls Gemini. In the default mock mode there is no network call: the
+    topic is the first non-empty line, key points are the first three sentences, and
+    difficulty is easy for fewer than 40 words, medium for 40–100, and hard above 100.
     """
     if os.getenv("AI_MODE", "mock").lower() == "real":
         return _summarize_with_gemini(raw_text)
@@ -145,7 +189,7 @@ def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     magnitude_a_squared = 0.0
     magnitude_b_squared = 0.0
 
-    for value_a, value_b in zip(vec_a, vec_b):
+    for value_a, value_b in zip(vec_a, vec_b, strict=True):
         dot_product += value_a * value_b
         magnitude_a_squared += value_a * value_a
         magnitude_b_squared += value_b * value_b

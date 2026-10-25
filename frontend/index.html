@@ -1,71 +1,76 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>StudyTrack Trainee Roster</title>
-    <link rel="stylesheet" href="style.css" />
+    <meta name="description" content="StudyTrack, the Myntra trainee enablement dashboard." />
+    <meta name="theme-color" content="#cc1f56" />
+    <title>StudyTrack</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/app.js"></script>
   </head>
   <body>
-    <header>
-      <h1>StudyTrack Trainee Roster</h1>
-      <p>Manage trainee records directly from the Myntra Enablement roster.</p>
-    </header>
+    <a class="skip-link" href="#main">Skip to content</a>
 
-    <nav aria-label="Page navigation">
-      <a href="#roster-list">Roster</a>
-      <a href="#add-student">Add trainee</a>
-      <a href="#ai-helper">AI Helper</a>
-    </nav>
+    <div id="wake-banner" class="banner" role="status" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      <span>Waking up the server. On the free hosting plan this can take up to a minute.</span>
+    </div>
 
-    <main>
-      <div id="error-banner" role="alert" hidden></div>
+    <div id="boot-screen" class="boot-screen">
+      <div class="boot-inner">
+        <span class="spinner" aria-hidden="true"></span>
+        <p id="boot-message">Loading StudyTrack…</p>
+      </div>
+    </div>
 
-      <section id="roster-panel" aria-labelledby="roster-label">
-        <p id="roster-label" class="section-label">Live trainee roster</p>
-        <section id="roster-list" aria-live="polite"></section>
-      </section>
+    <div id="shell" class="shell" hidden>
+      <aside class="sidebar">
+        <a class="brand" href="#/dashboard">
+          <img src="favicon.svg" alt="" width="30" height="30" />
+          <span>StudyTrack<small>Trainee Enablement</small></span>
+        </a>
+        <nav class="nav" aria-label="Main">
+          <a href="#/dashboard" data-route="dashboard"><span data-icon="dashboard"></span><span>Dashboard</span></a>
+          <a href="#/trainees" data-route="trainees"><span data-icon="users"></span><span>Trainees</span></a>
+          <a href="#/courses" data-route="courses"><span data-icon="book"></span><span>Courses</span></a>
+          <a href="#/reports" data-route="reports"><span data-icon="chart"></span><span>Reports</span></a>
+          <a href="#/assistant" data-route="assistant"><span data-icon="sparkles"></span><span>AI Helper</span></a>
+          <a href="#/users" data-route="users" data-admin-only hidden><span data-icon="shield"></span><span>Users</span></a>
+        </nav>
+        <p class="sidebar-footer">Myntra Trainee Enablement</p>
+      </aside>
 
-      <section id="add-student" aria-labelledby="add-student-label">
-        <p id="add-student-label" class="section-label">Add a trainee</p>
-        <form id="student-form">
-          <label>
-            Name
-            <input id="student-name" name="name" type="text" required maxlength="120" />
-          </label>
-          <label>
-            Email
-            <input id="student-email" name="email" type="email" required maxlength="255" />
-          </label>
-          <label>
-            Age
-            <input id="student-age" name="age" type="number" min="1" required />
-          </label>
-          <button type="submit">Add trainee</button>
-        </form>
-      </section>
+      <div class="workspace">
+        <header class="topbar">
+          <a class="brand topbar-brand" href="#/dashboard" aria-label="StudyTrack home">
+            <img src="favicon.svg" alt="" width="26" height="26" />
+          </a>
+          <h1 id="page-title">Dashboard</h1>
+          <div class="user-menu">
+            <button id="user-button" class="user-button" type="button" aria-expanded="false" aria-controls="user-menu">
+              <span id="user-avatar" class="avatar" aria-hidden="true"></span>
+              <span id="user-name" class="user-name"></span>
+              <span data-icon="chevron-down"></span>
+              <span class="sr-only">Account menu</span>
+            </button>
+            <div id="user-menu" class="menu" hidden>
+              <div class="menu-header">
+                <strong id="menu-name"></strong>
+                <span id="menu-email"></span>
+              </div>
+              <button type="button" data-action="change-password"><span data-icon="key"></span>Change password</button>
+              <button type="button" data-action="sign-out"><span data-icon="logout"></span>Sign out</button>
+            </div>
+          </div>
+        </header>
 
-      <section id="ai-helper" aria-labelledby="ai-helper-label">
-        <p id="ai-helper-label" class="section-label">AI Helper</p>
-        <div class="ai-helper-grid">
-          <form id="summary-form" class="ai-form">
-            <label for="notes-input">Study notes</label>
-            <textarea id="notes-input" rows="7" placeholder="Paste study notes to summarize"></textarea>
-            <button type="submit">Summarize</button>
-          </form>
-          <div id="summary-result" class="assistant-result" aria-live="polite"></div>
+        <main id="main" tabindex="-1"></main>
+      </div>
+    </div>
 
-          <form id="note-search-form" class="ai-form">
-            <label for="note-query">Search study notes</label>
-            <input id="note-query" type="search" placeholder="e.g. binary search" />
-            <button type="submit">Search Notes</button>
-          </form>
-          <div id="note-search-results" class="assistant-result" aria-live="polite"></div>
-        </div>
-      </section>
-    </main>
-
-    <footer>StudyTrack · Myntra Trainee Enablement</footer>
-    <script src="app.js"></script>
+    <div id="toasts" class="toasts" aria-live="polite"></div>
   </body>
 </html>

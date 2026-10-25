@@ -1,0 +1,23 @@
+# Security headers for every page. The app uses no inline scripts or styles, so the CSP can stay
+# strict, and connect-src 'self' works because the API is reached through the same-origin proxy.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Cross-Origin-Opener-Policy: same-origin
+
+# File names are not content-hashed, so browsers must revalidate after each deploy.
+/
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/login.html
+  Cache-Control: no-cache
+/login
+  Cache-Control: no-cache
+/js/*
+  Cache-Control: no-cache
+/css/*
+  Cache-Control: no-cache

@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import argparse
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .database import Base, SessionLocal, engine
+from .database import SessionLocal, run_migrations
 from .models import Course, Student
-
 
 SEED_STUDENTS = [
     {"name": "Aditi Rao", "email": "aditi.rao@example.com", "age": 22},
@@ -52,18 +51,21 @@ def seed_if_empty(db: Session) -> None:
 
 
 def seed_database(reset: bool = False) -> None:
-    """Create tables and seed once; reset makes the documented demo repeatable."""
-    Base.metadata.create_all(bind=engine)
+    """Migrate the schema and seed once; reset makes the documented demo repeatable.
+
+    Reset replaces trainees and courses only. User accounts are never touched.
+    """
+    run_migrations()
     with SessionLocal() as db:
         if reset:
-            db.query(Course).delete()
-            db.query(Student).delete()
+            db.execute(delete(Course))
+            db.execute(delete(Student))
             db.commit()
         seed_if_empty(db)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Seed the StudyTrack SQLite database.")
+    parser = argparse.ArgumentParser(description="Seed the StudyTrack database with the demo roster.")
     parser.add_argument("--reset", action="store_true", help="replace existing local demo data")
     args = parser.parse_args()
     seed_database(reset=args.reset)
