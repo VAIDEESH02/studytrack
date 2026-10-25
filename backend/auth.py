@@ -14,8 +14,10 @@ import os
 import secrets
 import time
 from collections import deque
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from threading import Lock
+from threading import BoundedSemaphore, Lock
 
 import jwt
 from fastapi import Depends, HTTPException, Response, status
@@ -37,6 +39,12 @@ _password_hash = PasswordHash.recommended()
 # Verifying against this when an email is unknown keeps response times the same either way.
 _DUMMY_HASH = _password_hash.hash(secrets.token_urlsafe(16))
 _development_secret = secrets.token_urlsafe(48)
+
+# Each Argon2 hash or check uses about 64 MB of memory. Capping concurrent hashing keeps a burst of
+# sign-in attempts from exhausting the free Render instance's 512 MB.
+MAX_CONCURRENT_HASHES = 2
+HASHING_WAIT_SECONDS = 10
+_hashing_slots = BoundedSemaphore(MAX_CONCURRENT_HASHES)
 
 session_cookie_scheme = APIKeyCookie(
     name=SESSION_COOKIE,
@@ -84,23 +92,46 @@ def check_settings() -> None:
         raise RuntimeError(f"SECRET_KEY must be at least {MIN_SECRET_KEY_LENGTH} characters in production")
     if not cookie_secure():
         raise RuntimeError("COOKIE_SECURE must not be disabled in production")
+    if not os.getenv("PROXY_SIGNING_SECRET", "").strip():
+        logger.warning(
+            "PROXY_SIGNING_SECRET is not set, so the API accepts requests that bypass the Netlify proxy. "
+            "Set the same value on Render and Netlify."
+        )
+
+
+@contextmanager
+def _hashing_slot() -> Iterator[None]:
+    if not _hashing_slots.acquire(timeout=HASHING_WAIT_SECONDS):
+        logger.warning("Password hashing is saturated; asked a client to retry")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The server is busy. Please try again.",
+            headers={"Retry-After": "5"},
+        )
+    try:
+        yield
+    finally:
+        _hashing_slots.release()
 
 
 def hash_password(password: str) -> str:
-    return _password_hash.hash(password)
+    with _hashing_slot():
+        return _password_hash.hash(password)
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return _password_hash.verify(password, password_hash)
+    with _hashing_slot():
+        return _password_hash.verify(password, password_hash)
 
 
 def authenticate(db: Session, email: str, password: str) -> models.User | None:
     """Return the active user for these credentials, or None. Never says which part was wrong."""
     user = crud.get_user_by_email(db, email)
     if user is None:
-        _password_hash.verify(password, _DUMMY_HASH)
+        verify_password(password, _DUMMY_HASH)
         return None
-    valid, updated_hash = _password_hash.verify_and_update(password, user.password_hash)
+    with _hashing_slot():
+        valid, updated_hash = _password_hash.verify_and_update(password, user.password_hash)
     if not valid or not user.is_active:
         return None
     if updated_hash is not None:

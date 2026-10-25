@@ -12,7 +12,7 @@ GitHub Actions: pull request → lint, tests on SQLite and Postgres, browser tes
                 push to main → the same CI → deploy API → deploy site → smoke-test the live site
 ```
 
-The browser only ever talks to the Netlify site. Netlify forwards `/api/*` to Render on the server side. That keeps the session cookie first-party (Safari blocks third-party cookies between `netlify.app` and `onrender.com`) and keeps the Render URL out of the frontend code. Every API route except `/health`, `/auth/login`, and `/auth/logout` requires a valid session, and the interactive docs are turned off in production.
+The browser only ever talks to the Netlify site. Netlify forwards `/api/*` to Render on the server side. That keeps the session cookie first-party (Safari blocks third-party cookies between `netlify.app` and `onrender.com`) and keeps the Render URL out of the frontend code. Netlify signs every request it forwards, and the API refuses anything unsigned, so the Render URL is useless on its own. Every API route except `/health`, `/auth/login`, and `/auth/logout` also requires a valid session, and the interactive docs are turned off in production.
 
 ## Run locally
 
@@ -63,40 +63,73 @@ To run the suite against Postgres, start one (for example `docker run --rm -e PO
 
 ## Deploy
 
+GitHub Actions is the only thing that publishes code. Render's auto-deploy is off (`autoDeployTrigger: "off"` in `render.yaml`) and the Netlify site has no Git builds, so nothing reaches production without passing CI.
+
 ### One-time setup
 
-1. **Database (Neon, free).** Create a project in the AWS Singapore region and copy the **direct** (not pooled) connection string. Render's free Postgres is deleted after 30 days, and Render's free disk is wiped on every restart, so SQLite is not an option there.
-2. **API (Render).** Go to New > Blueprint and pick this repository; `render.yaml` describes the service. When prompted, enter `DATABASE_URL`, `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, and `BOOTSTRAP_ADMIN_NAME`. Leave `GOOGLE_API_KEY` empty unless you want Gemini summaries. After the first deploy, copy the service URL and, under Settings, the **Deploy Hook** URL.
-3. **Site (Netlify).** Create a site without connecting Git builds (for example with `npx netlify-cli sites:create`). Note its **Site ID** and create a personal access token under User settings > Applications. Set `ALLOWED_ORIGINS` on Render to the Netlify URL.
-4. **GitHub.** Under Settings > Environments, create `production` and add:
-   - secrets: `RENDER_DEPLOY_HOOK_URL`, `NETLIFY_AUTH_TOKEN`, `NETLIFY_SITE_ID`, `SMOKE_EMAIL`, `SMOKE_PASSWORD`
+Do these in order. Generate each secret with `python -c "import secrets; print(secrets.token_urlsafe(48))"` and keep it in a password manager.
+
+0. **Secure the accounts.** Turn on two-factor sign-in for GitHub, Render, Netlify, and Neon. In GitHub > Settings > Applications, limit the Render and Netlify GitHub apps to only this repository. In this repository's Settings > Code security, enable secret scanning, push protection, and Dependabot alerts.
+1. **Open a pull request** from your feature branch. Wait for the five CI checks to pass, then merge. The Deploy workflow will run and stop at "Check configuration" because no secrets exist yet. That is expected and deploys nothing.
+2. **Database (Neon, free).** Create a project in AWS Singapore and copy the **direct** (not pooled) connection string. Render's free Postgres is deleted after 30 days, and Render's free disk is wiped on every restart, so SQLite is not an option there.
+3. **API (Render).** Go to New > Blueprint and pick this repository; `render.yaml` describes the service. When prompted, enter `DATABASE_URL`, `PROXY_SIGNING_SECRET`, `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, and `BOOTSTRAP_ADMIN_NAME`. Leave `GOOGLE_API_KEY` empty unless you want Gemini summaries. In the first deploy's logs, look for "Running upgrade" and "Created bootstrap admin". Copy the service URL (it gets a suffix if `studytrack-api` was taken) and, under Settings, the **Deploy Hook** URL.
+4. **Site (Netlify).** Create the site with Add new site > Deploy manually, so it has no Git builds. If you already made a Git-linked site, open Site configuration > Build & deploy > Continuous deployment and choose **Stop builds** instead. Under Site configuration > Environment variables, add `PROXY_SIGNING_SECRET` with the same value as on Render; its scopes must include **Runtime**. Note the site URL and **Site ID**, and create a personal access token under User settings > Applications.
+5. **Back on Render,** set `ALLOWED_ORIGINS` to the Netlify URL.
+6. **GitHub.** Under Settings > Environments, create `production` and add:
+   - secrets: `RENDER_DEPLOY_HOOK_URL`, `NETLIFY_AUTH_TOKEN`, `NETLIFY_SITE_ID`
    - variables: `RENDER_API_URL` (for example `https://studytrack-api.onrender.com`) and `SITE_URL` (for example `https://studytrack.netlify.app`)
 
-   Then protect `main` under Settings > Branches: require pull requests and the CI checks **Lint**, **Tests (sqlite)**, **Tests (postgres)**, **Browser tests**, and **Dependency audit**.
-5. **First sign-in.** Open the Netlify URL, sign in as the bootstrap admin, and create real accounts plus a `member` account for the smoke test (its credentials are the `SMOKE_*` secrets). Then delete `BOOTSTRAP_ADMIN_PASSWORD` from Render.
+   Then protect `main` under Settings > Branches: require pull requests and the checks **Lint**, **Tests (sqlite)**, **Tests (postgres)**, **Browser tests**, and **Dependency audit**.
+7. **Deploy.** Open Actions > Deploy > Run workflow. The backend, frontend, and smoke jobs should all pass; the sign-in smoke check is skipped until the next step.
+8. **First sign-in.** Open the Netlify URL, sign in as the bootstrap admin, and create real accounts plus a `member` account used only by the smoke test. Add its credentials as `SMOKE_EMAIL` and `SMOKE_PASSWORD` secrets on the `production` environment. Delete `BOOTSTRAP_ADMIN_PASSWORD` from Render, then run the Deploy workflow once more.
+9. **Monitoring.** Add a free uptime check (UptimeRobot or similar) on `https://<site>/api/health` every 5 minutes with email alerts; it also keeps the free instance warm. Turn on Render's notifications for failed deploys.
 
 ### How a change goes live
 
 Open a pull request: `.github/workflows/ci.yml` runs lint, the tests on SQLite and Postgres, the browser tests, and `pip-audit`. Merge to `main`: `.github/workflows/deploy.yml` runs CI again on the merged commit, then:
 
 1. triggers Render's deploy hook for exactly that commit and waits until `/health` reports it,
-2. publishes `frontend/` to Netlify with the CLI, after rewriting the proxy target in `frontend/_redirects` to `RENDER_API_URL`,
-3. checks the live site: health through the proxy, 401 without a session, no public `/docs`, a CSP header, and a real sign-in with the smoke account.
-
-Render's auto-deploy is off (`autoDeployTrigger: "off"`) and Netlify has no Git builds, so nothing reaches production without passing CI.
+2. publishes `frontend/` to Netlify with the CLI, after pointing the proxy rules in `netlify.toml` at `RENDER_API_URL`,
+3. checks the live site: health through the proxy, 401 without a session, 403 when calling Render directly, a CSP header, and a real sign-in with the smoke account.
 
 ### Free-tier cold starts
 
-A free Render instance sleeps after about 15 idle minutes and takes about a minute to wake. Netlify gives up on a proxied request after 26 seconds. The frontend handles this: the sign-in page wakes the API while you type, and read requests retry for up to 90 seconds behind a "Waking up the server" banner. To avoid cold starts entirely, set the repository variable `KEEP_WARM=true` to enable `.github/workflows/keep-warm.yml`, or move the service to a paid Render plan.
+A free Render instance sleeps after about 15 idle minutes and takes about a minute to wake. Netlify gives up on a proxied request after 26 seconds. The frontend handles this: the sign-in page wakes the API while you type, and read requests retry for up to 90 seconds behind a "Waking up the server" banner. To avoid cold starts entirely, use the uptime check above, set the repository variable `KEEP_WARM=true` to enable `.github/workflows/keep-warm.yml`, or move the service to a paid Render plan.
+
+### Check the protections on the live site
+
+```bash
+curl -i https://<render>/students/        # 403: direct calls to Render are refused
+curl -i https://<render>/health           # 200 with the deployed commit
+curl -i https://<site>/api/students/      # 401: signed by Netlify, but no session
+for i in $(seq 25); do curl -s -o /dev/null -w "%{http_code} " -H 'Content-Type: application/json' \
+  -d '{"email":"x@y.z","password":"wrong"}' https://<site>/api/auth/login; done   # 401s, then 429
+```
 
 ## Security model
 
+Protection is layered, so each request has to pass every layer before it reaches the data.
+
+| Layer | What it does | Where it lives |
+| --- | --- | --- |
+| Network | Cloudflare absorbs network-level DDoS floods, on every Render plan | Render, automatic |
+| Edge | Netlify limits each visitor IP to 20 sign-in attempts and 300 API requests a minute | `netlify.toml` |
+| Origin lock | Netlify signs every request it forwards. The API refuses unsigned requests with a 403 before doing any work, so calling the Render URL directly gets nowhere. Only `GET /health` is exempt, for Render's health checks | `netlify.toml`, `backend/edge.py` |
+| Application | A session is required on every route except health, sign-in, and sign-out. Five failed sign-ins lock an email for 15 minutes. At most two password hashes run at once, and request bodies are capped at 256 KB | `backend/auth.py`, `backend/edge.py` |
+| Data | Neon only accepts TLS connections. Every secret lives in environment variables | Neon, Render, Netlify |
+| Accounts | Two-factor sign-in, GitHub apps limited to this repository, branch protection, secret scanning, Dependabot, and `pip-audit` in CI | GitHub, Render, Netlify, Neon |
+
+More detail:
+
 - Passwords are hashed with Argon2. Sessions are signed JWTs in an `HttpOnly`, `SameSite=Lax`, `Secure` cookie that page scripts cannot read. They last `SESSION_HOURS` (default 8).
-- Five failed sign-ins for one email lock it for 15 minutes. Error messages never reveal whether an email exists.
+- Sign-in errors never reveal whether an email exists. Failed attempts are logged with the visitor's IP as reported by Netlify, never with the email.
 - Changing a password, role, or active status signs that user out everywhere.
 - Administrators manage users. They cannot deactivate or demote themselves, so at least one active admin always remains.
-- The production site sends a strict Content-Security-Policy plus `nosniff`, `DENY` framing, and a referrer policy (`frontend/_headers`).
-- Secrets come only from environment variables. `.env` is gitignored, and this repository is public, so never commit one.
+- Netlify deploy previews carry a different signature context, so they can never reach production data.
+- The site sends a strict Content-Security-Policy, `nosniff`, `DENY` framing, and a referrer policy (`frontend/_headers`). API responses add `Cache-Control: no-store` and, in production, HSTS.
+- This repository is public. `.env` is gitignored; never commit one.
+
+Known trade-off: anyone who knows an account's email can lock it for 15 minutes with five wrong passwords. That is accepted in exchange for stopping password guessing.
 
 ## API endpoints
 
