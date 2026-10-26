@@ -1,0 +1,28 @@
+# Keep the build context small and secrets out of every image.
+.git
+.github
+.env
+.env.*
+!.env.example
+venv
+.venv
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.ruff_cache
+.coverage
+coverage.xml
+htmlcov
+test-results
+backend/studytrack.db
+*.db
+.DS_Store
+# The frontend is served by Netlify, or by nginx from a bind mount in compose.yaml.
+frontend
+*.md
+netlify.toml
+render.yaml
+compose.yaml
+Dockerfile
+.dockerignore
+compose.override.yaml

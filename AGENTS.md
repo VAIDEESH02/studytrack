@@ -21,7 +21,8 @@ uvicorn backend.main:app --reload --port 8000 --env-file .env
 Second terminal: `python3 -m http.server 5500 --directory frontend`, then open `http://127.0.0.1:5500` (or `localhost:5500`; use 127.0.0.1 if another service such as ChromaDB holds `localhost:8000` on IPv6). API docs: `http://localhost:8000/docs` (disabled in production).
 
 - Tests: `pytest` (unit + API, 140+ tests, temp SQLite). `TEST_DATABASE_URL=postgresql://... pytest` runs the same suite on Postgres. Tests never read `DATABASE_URL`.
-- Browser tests: `pytest -m e2e` (Playwright; starts its own servers on 8000/5500; first run `python -m playwright install chromium`).
+- Browser tests: `pytest -m e2e` (Playwright; starts its own servers on 8000/5500; first run `python -m playwright install chromium`). Set `E2E_BASE_URL` (+ `E2E_EMAIL`/`E2E_PASSWORD`) to run them against an already-running stack instead.
+- Docker: `docker compose up --build` (Postgres 18 + API image + nginx on `127.0.0.1:5500`; sign in as `admin@studytrack.local` / `change-me-locally`). `docker compose --profile test run --rm --build tests` runs the suite inside the test image on a throwaway Postgres 18, exactly as CI does.
 - Lint/format: `ruff check . && ruff format --check .`
 - Accounts: `python -m backend.manage create-user --email you@x.com --name "You" --role admin`; `... set-password --email ...`.
 - Demo data: `python -m backend.seed_data --reset` (replaces trainees/courses, never users).
@@ -41,7 +42,8 @@ Second terminal: `python3 -m http.server 5500 --directory frontend`, then open `
 - `backend/manage.py` — account CLI. `backend/seed_data.py` — idempotent demo seeding.
 - `frontend/` — vanilla ES modules, no build step. `js/config.js` picks the API base (local port 8000 vs `/api`), `js/api.js` is the only fetch wrapper (cookies, 401 redirect, 422 field errors, cold-start retries), `js/ui.js` holds DOM helpers, `js/router.js` hash routes, `js/views/*` one module per page. `login.html` is the sign-in page. `_headers` holds the site's CSP and other security headers.
 - `backend/edge.py` — ASGI middlewares that run before any route: security headers, the Netlify origin lock (when `PROXY_SIGNING_SECRET` is set, every request except `GET /health` must carry a valid Netlify `x-nf-sign` JWS with `deploy_context=production`), and a 256 KB body cap. `edge.trusted_client_ip()` gives the Netlify-reported visitor IP on signed requests.
-- Deployment: `render.yaml` (API), `netlify.toml` (signed `/api` proxy rules with per-IP rate limits; signed proxies only work in this file, so don't add a `_redirects` file), `.github/workflows/ci.yml` (lint, tests on SQLite + Postgres, e2e, pip-audit), `deploy.yml` (CI, then Render deploy hook for the exact commit, wait for `/health` version, Netlify CLI deploy, live smoke test).
+- `Dockerfile` — multi-stage: `base` (Python + production deps, non-root uid 10001), `test` (adds dev deps and `tests/`; what CI runs pytest in), `runtime` (default; same uvicorn command as Render, `HEALTHCHECK` on `/health`). `compose.yaml` — `db` (Postgres 18.6, persistent volume), `api`, `web` (nginx serving `frontend/`), plus `db-test` (tmpfs) and `tests` under the `test` profile. Render still uses its native Python runtime; the image is for local parity and CI.
+- Deployment: `render.yaml` (API), `netlify.toml` (signed `/api` proxy rules with per-IP rate limits; signed proxies only work in this file, so don't add a `_redirects` file), `.github/workflows/ci.yml` (lint incl. hadolint + compose config, SQLite tests natively, Postgres tests inside the Docker test image, Playwright against the full compose stack, pip-audit), `deploy.yml` (CI, then Render deploy hook for the exact commit, wait for `/health` version, Netlify CLI deploy, live smoke test).
 
 ## Conventions specific to this repo
 
@@ -52,3 +54,4 @@ Second terminal: `python3 -m http.server 5500 --directory frontend`, then open `
 - Frontend: never use `innerHTML` with data; build DOM with `el()` / `textContent`. No inline `<script>` or `style=""` (the production CSP forbids them); set CSS custom properties through `element.style.setProperty`. Colors come from `css/tokens.css`.
 - Schema changes need an Alembic migration; `create_all` is not used by the app.
 - Password hashing goes through `auth.hash_password` / `auth.verify_password`, which share a 2-slot semaphore (503 when saturated) so Argon2 can't exhaust the 512 MB Render instance. Don't call `_password_hash` directly.
+- Docker: base images are pinned to exact versions (bump by hand; Dependabot is security-only and doesn't cover images). Keep `AI_MODE: mock` fixed in `compose.yaml`, because Compose reads `./.env` and must never pick up a real Gemini key in tests. CI job names (`Lint`, `Tests (sqlite)`, `Tests (postgres)`, `Browser tests`, `Dependency audit`) are required by branch protection; don't rename them.
