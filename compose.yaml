@@ -1,0 +1,100 @@
+# StudyTrack on your machine: Postgres 18 (the same version as Neon), the API image, and the
+# static frontend, wired together the way production is.
+#
+#   docker compose up --build                     app at http://127.0.0.1:5500, API at :8000
+#   docker compose --profile test run --rm tests  full test suite inside the image, on Postgres
+#   docker compose down                           stop (add --volumes to wipe the local database)
+#
+# Sign in with BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD below (override either from your
+# shell). These defaults are for local use only; production values live in Render.
+# Ports bind to 127.0.0.1 only, so nothing is reachable from other machines on your network.
+
+name: studytrack
+
+services:
+  db:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: studytrack
+      POSTGRES_PASSWORD: studytrack
+      POSTGRES_DB: studytrack
+    volumes:
+      # Postgres 18 images keep data under /var/lib/postgresql/18/; mount the parent directory.
+      - pgdata:/var/lib/postgresql
+    ports:
+      - "127.0.0.1:55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U studytrack -d studytrack"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build:
+      context: .
+      target: runtime
+    image: studytrack-api:local
+    environment:
+      DATABASE_URL: postgresql://studytrack:studytrack@db:5432/studytrack
+      ENVIRONMENT: development
+      SECRET_KEY: ${SECRET_KEY:-local-docker-only-secret-key-not-for-production-use}
+      COOKIE_SECURE: "false"
+      ALLOWED_ORIGINS: http://127.0.0.1:5500,http://localhost:5500
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@studytrack.local}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-change-me-locally}
+      BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-Local Admin}
+      SEED_DEMO_DATA: "true"
+      # Fixed on purpose. Compose reads ./.env to fill ${...} values, and that file may hold
+      # AI_MODE=real and a Gemini key for native runs; the Docker stack and CI must stay offline.
+      # To try Gemini in Docker, put AI_MODE and GOOGLE_API_KEY under services.api.environment in
+      # a compose.override.yaml (gitignored; Compose merges it automatically).
+      AI_MODE: mock
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    # Stands in for Netlify. The frontend calls the API at <same host>:8000 when served locally.
+    image: nginx:1.30.6-alpine
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    ports:
+      - "127.0.0.1:5500:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # Test-only services, started by: docker compose --profile test run --rm tests
+  db-test:
+    profiles: [test]
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: studytrack
+      POSTGRES_PASSWORD: studytrack
+      POSTGRES_DB: studytrack_test
+    # Throwaway, in-memory storage: fast, and never touches your local data in the db service.
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U studytrack -d studytrack_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  tests:
+    profiles: [test]
+    build:
+      context: .
+      target: test
+    image: studytrack-test:local
+    environment:
+      TEST_DATABASE_URL: postgresql://studytrack:studytrack@db-test:5432/studytrack_test
+    command: ["pytest", "-p", "no:cacheprovider", "--cov=backend", "--cov-report=term", "--cov-fail-under=90"]
+    depends_on:
+      db-test:
+        condition: service_healthy
+
+volumes:
+  pgdata:
