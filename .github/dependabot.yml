@@ -1,9 +1,12 @@
+# Security fixes only: open-pull-requests-limit 0 turns off routine version-bump PRs.
+# Dependabot security updates (enabled in repo settings) still open PRs for known vulnerabilities.
 version: 2
 updates:
   - package-ecosystem: pip
     directories: ["/", "/backend"]
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     groups:
       python-dependencies:
         patterns: ["*"]
@@ -11,3 +14,4 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
