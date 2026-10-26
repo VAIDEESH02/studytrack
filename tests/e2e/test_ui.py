@@ -35,7 +35,8 @@ def test_sign_in_is_required_and_returns_to_the_requested_page(page: Page, app_u
 def test_full_workflow(page: Page, app_url: str):
     page.goto(f"{app_url}/")
     sign_in(page, app_url)
-    expect(page.get_by_role("heading", name="Welcome back, Eve")).to_be_visible()
+    # Any admin name: the self-started servers use "Eve Tester", the Docker stack its own.
+    expect(page.get_by_role("heading", name=re.compile(r"^Welcome back, \S+"))).to_be_visible()
     expect(page.locator(".stat", has=page.get_by_text("Trainees", exact=True))).to_contain_text("8")
 
     # Add a trainee, then try a duplicate email.

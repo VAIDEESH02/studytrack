@@ -11,3 +11,4 @@ backend/studytrack.db
 coverage.xml
 htmlcov/
 test-results/
+compose.override.yaml

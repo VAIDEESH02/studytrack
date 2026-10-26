@@ -49,6 +49,23 @@ To reset the demo trainees and courses (user accounts are kept), run `python -m 
 
 If you have a `backend/studytrack.db` from before sign-in was added, it is upgraded in place on first start.
 
+## Run with Docker
+
+Docker runs the same stack as production without installing Python or Postgres: Postgres 18 (Neon's version), the API image built from the `Dockerfile`, and nginx serving `frontend/` in place of Netlify.
+
+```bash
+docker compose up --build
+```
+
+Open `http://127.0.0.1:5500` and sign in as `admin@studytrack.local` with password `change-me-locally`. To use your own account, set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` in your shell before the first start. The admin is only created while the database has no users. `docker compose down` stops everything and keeps the data; add `--volumes` to start over with an empty database.
+
+Notes:
+
+- Ports bind to `127.0.0.1` only: the site on 5500, the API on 8000, and Postgres on 55432 for tools such as `psql`.
+- The API container runs as an unprivileged user and checks its own `/health`.
+- Compose reads `./.env` to fill in `${...}` values, but the AI Helper is fixed to offline mock mode so the stack never calls Gemini by accident. To try Gemini in Docker, create a gitignored `compose.override.yaml` that sets `AI_MODE` and `GOOGLE_API_KEY` under `services.api.environment`.
+- Render still deploys with its native Python runtime from `render.yaml`. The `runtime` stage of the `Dockerfile` runs the same start command, so switching Render to Docker later only means setting `runtime: docker` and removing the build and start commands from `render.yaml`.
+
 ## Tests and linting
 
 ```bash
@@ -59,7 +76,16 @@ python -m playwright install chromium      # once, before the browser tests
 pytest -m e2e                              # browser tests; they start their own servers on 8000 and 5500
 ```
 
-To run the suite against Postgres, start one (for example `docker run --rm -e POSTGRES_PASSWORD=postgres -p 55432:5432 postgres:17`) and run `TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/postgres pytest`. The tests never read `DATABASE_URL`, so they cannot touch a real database by accident.
+With Docker you can run the suite the way CI does:
+
+```bash
+docker compose --profile test run --rm --build tests    # every test inside the image, on a throwaway Postgres 18
+docker compose --profile test down                      # stop the throwaway database afterwards
+```
+
+To point the browser tests at the Docker stack instead of their own servers, start it with `docker compose up --build -d --wait`, then run `E2E_BASE_URL=http://127.0.0.1:5500 E2E_EMAIL=admin@studytrack.local E2E_PASSWORD=change-me-locally pytest -m e2e`. That run adds and deletes a trainee and creates a user, so use a fresh database.
+
+The tests never read `DATABASE_URL`, so they cannot touch a real database by accident. They use `TEST_DATABASE_URL` when it is set and a temporary SQLite file otherwise.
 
 ## Deploy
 
@@ -86,7 +112,7 @@ Do these in order. Generate each secret with `python -c "import secrets; print(s
 
 ### How a change goes live
 
-Open a pull request: `.github/workflows/ci.yml` runs lint, the tests on SQLite and Postgres, the browser tests, and `pip-audit`. Merge to `main`: `.github/workflows/deploy.yml` runs CI again on the merged commit, then:
+Open a pull request: `.github/workflows/ci.yml` runs lint (including the Dockerfile and `compose.yaml`), the tests on SQLite, the tests inside the Docker image on Postgres 18, the browser tests against the full Docker stack, and `pip-audit`. Merge to `main`: `.github/workflows/deploy.yml` runs CI again on the merged commit, then:
 
 1. triggers Render's deploy hook for exactly that commit and waits until `/health` reports it,
 2. publishes `frontend/` to Netlify with the CLI, after pointing the proxy rules in `netlify.toml` at `RENDER_API_URL`,
