@@ -26,7 +26,7 @@ services:
       - key: SESSION_HOURS
         value: "8"
       - key: ALLOWED_ORIGINS # browsers reach the API through the Netlify proxy; set this to your Netlify URL
-        value: https://studytrack.netlify.app
+        value: https://demo-studytracker.netlify.app
       - key: SEED_DEMO_DATA # "false" to start with an empty roster
         value: "true"
       - key: AI_MODE # "real" plus GOOGLE_API_KEY enables Gemini summaries
